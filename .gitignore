@@ -1,0 +1,5 @@
+node_modules/
+thumbnails/
+package-lock.json
+streamers.json
+.env
