@@ -266,15 +266,15 @@ async function sendLiveNotification(streamInfo, userInfo) {
 
   let thumbnailPath = path.join(THUMBNAIL_DIR, `${login}.jpg`);
 
-  if (!fs.existsSync(thumbnailPath)) {
-    const dl = await downloadThumbnail(
-      streamInfo.thumbnail_url
-        .replace("{width}", 1280)
-        .replace("{height}", 720),
-      `${login}.jpg`
-    );
-    if (dl) thumbnailPath = dl;
-    else thumbnailPath = null;
+  const downloaded = await downloadThumbnail(
+    streamInfo.thumbnail_url.replace("{width}", 1280).replace("{height}", 720),
+    `${login}.jpg`
+  );
+
+  if (downloaded) {
+    thumbnailPath = downloaded;
+  } else if (!fs.existsSync(thumbnailPath)) {
+    thumbnailPath = null;
   }
 
   if (thumbnailPath) {
@@ -293,6 +293,8 @@ async function sendLiveNotification(streamInfo, userInfo) {
     : [];
 
   await channel.send({ embeds: [embed], components: [row], files });
+
+  console.log(`[LIVE NOTIFY] ${login} — ${streamInfo.title}`);
 }
 
 async function checkStreamer(streamer) {
