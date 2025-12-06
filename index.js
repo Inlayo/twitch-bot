@@ -250,7 +250,7 @@ async function sendLiveNotification(streamInfo, userInfo) {
       iconURL: userInfo.profile_image_url,
       url: `https://twitch.tv/${login}`,
     })
-    .setTitle(streamInfo.title)
+    .setTitle(streamInfo.title || "No title")
     .setURL(`https://twitch.tv/${login}`)
     .setColor("#9146FF")
     .setFooter({ text: `made by Inlayo` })
