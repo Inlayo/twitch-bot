@@ -1,6 +1,3 @@
-node_modules/
-thumbnails/
-package-lock.json
-streamers.json
-guild-settings.json
 .env
+thumbnails/
+guild-settings.json.backup

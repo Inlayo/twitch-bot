@@ -12,39 +12,62 @@ const {
   ButtonStyle,
 } = require("discord.js");
 
-const GUILD_SETTINGS_FILE = path.join(__dirname, "guild-settings.json");
-if (!fs.existsSync(GUILD_SETTINGS_FILE)) {
-  fs.writeFileSync(GUILD_SETTINGS_FILE, JSON.stringify({}));
+const SETTINGS_DIR = path.join(__dirname, "settings");
+if (!fs.existsSync(SETTINGS_DIR)) {
+  fs.mkdirSync(SETTINGS_DIR);
 }
 
-function loadGuildSettings() {
-  return JSON.parse(fs.readFileSync(GUILD_SETTINGS_FILE));
+function getChannelSettingFile(channelId) {
+  return path.join(SETTINGS_DIR, `${channelId}.json`);
 }
 
-function saveGuildSettings(data) {
-  fs.writeFileSync(GUILD_SETTINGS_FILE, JSON.stringify(data, null, 2));
-}
-
-function getGuildSetting(guildId) {
-  const settings = loadGuildSettings();
-  if (!settings[guildId]) {
-    settings[guildId] = {
-      channelId: null,
+function loadChannelSettings(channelId) {
+  const file = getChannelSettingFile(channelId);
+  if (!fs.existsSync(file)) {
+    const defaultSettings = {
       streamers: [],
       liveStatus: {}
     };
-    saveGuildSettings(settings);
+    fs.writeFileSync(file, JSON.stringify(defaultSettings, null, 2));
+    return defaultSettings;
   }
-  return settings[guildId];
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function updateGuildSetting(guildId, updates) {
-  const settings = loadGuildSettings();
-  settings[guildId] = { ...settings[guildId], ...updates };
-  saveGuildSettings(settings);
+function saveChannelSettings(channelId, data) {
+  const file = getChannelSettingFile(channelId);
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-let guildSettings = loadGuildSettings();
+function getAllChannelIds() {
+  if (!fs.existsSync(SETTINGS_DIR)) return [];
+  return fs.readdirSync(SETTINGS_DIR)
+    .filter(f => f.endsWith('.json'))
+    .map(f => f.replace('.json', ''));
+}
+
+// Backward compatibility: migrate old guild-settings.json to new structure
+const OLD_GUILD_SETTINGS_FILE = path.join(__dirname, "guild-settings.json");
+if (fs.existsSync(OLD_GUILD_SETTINGS_FILE)) {
+  try {
+    const oldSettings = JSON.parse(fs.readFileSync(OLD_GUILD_SETTINGS_FILE, 'utf8'));
+    for (const [guildId, setting] of Object.entries(oldSettings)) {
+      if (setting.channelId) {
+        const channelId = setting.channelId;
+        const newSettings = {
+          streamers: setting.streamers || [],
+          liveStatus: setting.liveStatus || {}
+        };
+        saveChannelSettings(channelId, newSettings);
+      }
+    }
+    // Rename old file to backup
+    fs.renameSync(OLD_GUILD_SETTINGS_FILE, OLD_GUILD_SETTINGS_FILE + '.backup');
+    console.log('Migrated old guild-settings.json to new settings structure');
+  } catch (err) {
+    console.error('Error migrating old settings:', err);
+  }
+}
 
 const THUMBNAIL_DIR = path.join(__dirname, "thumbnails");
 if (!fs.existsSync(THUMBNAIL_DIR)) {
@@ -108,27 +131,19 @@ client.on("messageCreate", async (msg) => {
   const command = args[0]?.toLowerCase();
   const name = args[1]?.toLowerCase();
 
-  const guildId = msg.guild.id;
-  const guildSetting = getGuildSetting(guildId);
+  const channelId = msg.channel.id;
+  const channelSettings = loadChannelSettings(channelId);
 
   if (command === "channel") {
-    if (!msg.member.permissions.has("ManageGuild")) {
-      return msg.reply("You need 'Manage Server' permission to use this command.");
-    }
-
-    updateGuildSetting(guildId, {
-      ...guildSetting,
-      channelId: msg.channel.id
-    });
-
-    return msg.reply(`Notification channel set to ${msg.channel.name}`);
+    // This command is now implicit - settings are per channel
+    return msg.reply(`This channel is now set up for stream notifications. Use \`!t add <streamer>\` to add streamers.`);
   }
 
   if (command === "add") {
     if (!name) return msg.reply("Please provide a streamer name.");
 
-    if (guildSetting.streamers.find((s) => s.login === name))
-      return msg.reply("Streamer already exists in this server.");
+    if (channelSettings.streamers.find((s) => s.login === name))
+      return msg.reply("Streamer already exists in this channel.");
 
     const userInfoRes = await axios.get(
       `https://api.twitch.tv/helix/users?login=${name}`,
@@ -149,46 +164,41 @@ client.on("messageCreate", async (msg) => {
       userid: userInfo.id,
     };
 
-    guildSetting.streamers.push(newStreamer);
-    guildSetting.liveStatus[userInfo.login] = false;
+    channelSettings.streamers.push(newStreamer);
+    channelSettings.liveStatus[userInfo.login] = false;
 
-    updateGuildSetting(guildId, guildSetting);
+    saveChannelSettings(channelId, channelSettings);
 
-    return msg.reply(`Streamer ${userInfo.login} added to this server.`);
+    return msg.reply(`Streamer ${userInfo.login} added to this channel.`);
   }
 
   if (command === "delete") {
     if (!name) return msg.reply("Please provide a streamer name.");
 
-    const exists = guildSetting.streamers.find((s) => s.login === name);
-    if (!exists) return msg.reply("Streamer not found in this server.");
+    const exists = channelSettings.streamers.find((s) => s.login === name);
+    if (!exists) return msg.reply("Streamer not found in this channel.");
 
-    guildSetting.streamers = guildSetting.streamers.filter((s) => s.login !== name);
-    delete guildSetting.liveStatus[name];
+    channelSettings.streamers = channelSettings.streamers.filter((s) => s.login !== name);
+    delete channelSettings.liveStatus[name];
 
-    updateGuildSetting(guildId, guildSetting);
+    saveChannelSettings(channelId, channelSettings);
 
-    return msg.reply(`Streamer ${name} removed from this server.`);
+    return msg.reply(`Streamer ${name} removed from this channel.`);
   }
 
   if (command === "list") {
-    if (guildSetting.streamers.length === 0) return msg.reply("No streamers saved in this server.");
-
-    const channelInfo = guildSetting.channelId
-      ? `<#${guildSetting.channelId}>`
-      : "Not set (use !t channel)";
+    if (channelSettings.streamers.length === 0) return msg.reply("No streamers saved in this channel.");
 
     return msg.reply(
-      `**Notification Channel:** ${channelInfo}\n\n` +
       "**Streamers:**\n" +
-      guildSetting.streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
+      channelSettings.streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
     );
   }
 
   msg.reply("Commands: channel, add, delete, list");
 });
 
-async function checkLoginChanged(streamer, guildId) {
+async function checkLoginChanged(streamer, channelId) {
   const { login, userid } = streamer;
 
   try {
@@ -220,11 +230,11 @@ async function checkLoginChanged(streamer, guildId) {
     const newLogin = idCheck.data.data[0].login.toLowerCase();
     streamer.login = newLogin;
 
-    const guildSetting = getGuildSetting(guildId);
-    const streamerIndex = guildSetting.streamers.findIndex(s => s.userid === userid);
+    const channelSettings = loadChannelSettings(channelId);
+    const streamerIndex = channelSettings.streamers.findIndex(s => s.userid === userid);
     if (streamerIndex !== -1) {
-      guildSetting.streamers[streamerIndex].login = newLogin;
-      updateGuildSetting(guildId, guildSetting);
+      channelSettings.streamers[streamerIndex].login = newLogin;
+      saveChannelSettings(channelId, channelSettings);
     }
 
     return newLogin;
@@ -233,7 +243,7 @@ async function checkLoginChanged(streamer, guildId) {
   return login;
 }
 
-async function sendLiveNotification(streamInfo, userInfo, guildId, channelId) {
+async function sendLiveNotification(streamInfo, userInfo, channelId) {
   const login = streamInfo.user_login;
   const channel = client.channels.cache.get(channelId);
 
@@ -293,12 +303,12 @@ async function sendLiveNotification(streamInfo, userInfo, guildId, channelId) {
 
   await channel.send({ embeds: [embed], components: [row], files });
 
-  console.log(`[LIVE NOTIFY] ${login} — ${streamInfo.title} (Guild: ${guildId})`);
+  console.log(`[LIVE NOTIFY] ${login} — ${streamInfo.title} (Channel: ${channelId})`);
 }
 
-async function checkStreamer(streamer, guildId, channelId) {
+async function checkStreamer(streamer, channelId) {
   try {
-    const login = await checkLoginChanged(streamer, guildId);
+    const login = await checkLoginChanged(streamer, channelId);
 
     const res = await axios.get(
       `https://api.twitch.tv/helix/streams?user_login=${login}`,
@@ -311,12 +321,12 @@ async function checkStreamer(streamer, guildId, channelId) {
     );
 
     const data = res.data.data;
-    const guildSetting = getGuildSetting(guildId);
+    const channelSettings = loadChannelSettings(channelId);
 
     if (data.length > 0) {
-      if (!guildSetting.liveStatus[login]) {
-        guildSetting.liveStatus[login] = true;
-        updateGuildSetting(guildId, guildSetting);
+      if (!channelSettings.liveStatus[login]) {
+        channelSettings.liveStatus[login] = true;
+        saveChannelSettings(channelId, channelSettings);
 
         const streamInfo = data[0];
 
@@ -332,12 +342,12 @@ async function checkStreamer(streamer, guildId, channelId) {
 
         const userInfo = userInfoRes.data.data[0];
 
-        sendLiveNotification(streamInfo, userInfo, guildId, channelId);
+        sendLiveNotification(streamInfo, userInfo, channelId);
       }
     } else {
-      if (guildSetting.liveStatus[login]) {
-        guildSetting.liveStatus[login] = false;
-        updateGuildSetting(guildId, guildSetting);
+      if (channelSettings.liveStatus[login]) {
+        channelSettings.liveStatus[login] = false;
+        saveChannelSettings(channelId, channelSettings);
       }
     }
   } catch { }
@@ -346,26 +356,29 @@ async function checkStreamer(streamer, guildId, channelId) {
 setInterval(() => {
   if (!twitchToken) return;
 
-  const allSettings = loadGuildSettings();
+  const allChannelIds = getAllChannelIds();
 
-  for (const [guildId, setting] of Object.entries(allSettings)) {
-    if (!setting.channelId || !setting.streamers || setting.streamers.length === 0) continue;
+  for (const channelId of allChannelIds) {
+    const settings = loadChannelSettings(channelId);
+    
+    if (!settings.streamers || settings.streamers.length === 0) continue;
 
-    setting.streamers.forEach(streamer => {
-      checkStreamer(streamer, guildId, setting.channelId);
+    settings.streamers.forEach(streamer => {
+      checkStreamer(streamer, channelId);
     });
   }
 }, 60000);
 
 app.get("/status", (req, res) => {
-  const allSettings = loadGuildSettings();
-  const statusByGuild = {};
+  const allChannelIds = getAllChannelIds();
+  const statusByChannel = {};
 
-  for (const [guildId, setting] of Object.entries(allSettings)) {
-    statusByGuild[guildId] = setting.liveStatus || {};
+  for (const channelId of allChannelIds) {
+    const settings = loadChannelSettings(channelId);
+    statusByChannel[channelId] = settings.liveStatus || {};
   }
 
-  res.json(statusByGuild);
+  res.json(statusByChannel);
 });
 app.get("/discord", (req, res) => res.json({ connected: !!client.readyAt }));
 app.get("/twitch", (req, res) => res.json({ token: !!twitchToken }));
