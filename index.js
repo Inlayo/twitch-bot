@@ -12,21 +12,39 @@ const {
   ButtonStyle,
 } = require("discord.js");
 
-const STREAMER_FILE = path.join(__dirname, "streamers.json");
-if (!fs.existsSync(STREAMER_FILE)) {
-  fs.writeFileSync(STREAMER_FILE, JSON.stringify([]));
+const GUILD_SETTINGS_FILE = path.join(__dirname, "guild-settings.json");
+if (!fs.existsSync(GUILD_SETTINGS_FILE)) {
+  fs.writeFileSync(GUILD_SETTINGS_FILE, JSON.stringify({}));
 }
 
-function loadStreamers() {
-  return JSON.parse(fs.readFileSync(STREAMER_FILE));
+function loadGuildSettings() {
+  return JSON.parse(fs.readFileSync(GUILD_SETTINGS_FILE));
 }
 
-function saveStreamers(data) {
-  fs.writeFileSync(STREAMER_FILE, JSON.stringify(data, null, 2));
+function saveGuildSettings(data) {
+  fs.writeFileSync(GUILD_SETTINGS_FILE, JSON.stringify(data, null, 2));
 }
 
-let streamers = loadStreamers();
-let liveStatus = {};
+function getGuildSetting(guildId) {
+  const settings = loadGuildSettings();
+  if (!settings[guildId]) {
+    settings[guildId] = {
+      channelId: null,
+      streamers: [],
+      liveStatus: {}
+    };
+    saveGuildSettings(settings);
+  }
+  return settings[guildId];
+}
+
+function updateGuildSetting(guildId, updates) {
+  const settings = loadGuildSettings();
+  settings[guildId] = { ...settings[guildId], ...updates };
+  saveGuildSettings(settings);
+}
+
+let guildSettings = loadGuildSettings();
 
 const THUMBNAIL_DIR = path.join(__dirname, "thumbnails");
 if (!fs.existsSync(THUMBNAIL_DIR)) {
@@ -57,7 +75,6 @@ const port = process.env.PORT || 3000;
 
 const twitchClientID = process.env.TWITCH_CLIENT_ID;
 const twitchSecret = process.env.TWITCH_SECRET;
-const discordChannelID = process.env.DISCORD_CHANNEL_ID;
 
 let twitchToken = null;
 
@@ -74,84 +91,44 @@ async function fetchTwitchToken() {
       `https://id.twitch.tv/oauth2/token?client_id=${twitchClientID}&client_secret=${twitchSecret}&grant_type=client_credentials`
     );
     twitchToken = res.data.access_token;
-  } catch {}
+  } catch { }
 }
 
 fetchTwitchToken();
 setInterval(fetchTwitchToken, 86400000);
 
-async function autoFixStreamers() {
-  let changed = false;
-  let updated = [];
-
-  for (const s of streamers) {
-    if (typeof s === "string") {
-      try {
-        const res = await axios.get(
-          `https://api.twitch.tv/helix/users?login=${s}`,
-          {
-            headers: {
-              "Client-ID": twitchClientID,
-              Authorization: `Bearer ${twitchToken}`,
-            },
-          }
-        );
-        if (res.data.data.length > 0) {
-          updated.push({
-            login: res.data.data[0].login.toLowerCase(),
-            userid: res.data.data[0].id,
-          });
-          changed = true;
-        }
-      } catch {}
-    } else if (!s.userid) {
-      try {
-        const res = await axios.get(
-          `https://api.twitch.tv/helix/users?login=${s.login}`,
-          {
-            headers: {
-              "Client-ID": twitchClientID,
-              Authorization: `Bearer ${twitchToken}`,
-            },
-          }
-        );
-        if (res.data.data.length > 0) {
-          updated.push({
-            login: res.data.data[0].login.toLowerCase(),
-            userid: res.data.data[0].id,
-          });
-          changed = true;
-        }
-      } catch {}
-    } else {
-      updated.push(s);
-    }
-  }
-
-  if (changed) {
-    streamers = updated;
-    saveStreamers(updated);
-  }
-
-  liveStatus = {};
-  for (const s of streamers) liveStatus[s.login] = false;
-}
-
-setTimeout(autoFixStreamers, 2000);
-
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
-  const prefix = "Inlayo";
+  if (!msg.guild) return;
+
+  const prefix = "!t";
   if (!msg.content.startsWith(prefix)) return;
 
   const args = msg.content.slice(prefix.length).trim().split(/ +/);
   const command = args[0]?.toLowerCase();
   const name = args[1]?.toLowerCase();
 
+  const guildId = msg.guild.id;
+  const guildSetting = getGuildSetting(guildId);
+
+  if (command === "channel") {
+    if (!msg.member.permissions.has("ManageGuild")) {
+      return msg.reply("You need 'Manage Server' permission to use this command.");
+    }
+
+    updateGuildSetting(guildId, {
+      ...guildSetting,
+      channelId: msg.channel.id
+    });
+
+    return msg.reply(`Notification channel set to ${msg.channel.name}`);
+  }
+
   if (command === "add") {
     if (!name) return msg.reply("Please provide a streamer name.");
-    if (streamers.find((s) => s.login === name))
-      return msg.reply("Streamer already exists.");
+
+    if (guildSetting.streamers.find((s) => s.login === name))
+      return msg.reply("Streamer already exists in this server.");
 
     const userInfoRes = await axios.get(
       `https://api.twitch.tv/helix/users?login=${name}`,
@@ -167,42 +144,51 @@ client.on("messageCreate", async (msg) => {
       return msg.reply("Twitch user not found.");
 
     const userInfo = userInfoRes.data.data[0];
-
-    streamers.push({
+    const newStreamer = {
       login: userInfo.login.toLowerCase(),
       userid: userInfo.id,
-    });
+    };
 
-    liveStatus[userInfo.login] = false;
-    saveStreamers(streamers);
+    guildSetting.streamers.push(newStreamer);
+    guildSetting.liveStatus[userInfo.login] = false;
 
-    return msg.reply(`Streamer ${userInfo.login} added.`);
+    updateGuildSetting(guildId, guildSetting);
+
+    return msg.reply(`Streamer ${userInfo.login} added to this server.`);
   }
 
   if (command === "delete") {
     if (!name) return msg.reply("Please provide a streamer name.");
 
-    const exists = streamers.find((s) => s.login === name);
-    if (!exists) return msg.reply("Streamer not found.");
+    const exists = guildSetting.streamers.find((s) => s.login === name);
+    if (!exists) return msg.reply("Streamer not found in this server.");
 
-    streamers = streamers.filter((s) => s.login !== name);
-    saveStreamers(streamers);
+    guildSetting.streamers = guildSetting.streamers.filter((s) => s.login !== name);
+    delete guildSetting.liveStatus[name];
 
-    return msg.reply(`Streamer ${name} deleted.`);
+    updateGuildSetting(guildId, guildSetting);
+
+    return msg.reply(`Streamer ${name} removed from this server.`);
   }
 
   if (command === "list") {
-    if (streamers.length === 0) return msg.reply("No streamers saved.");
+    if (guildSetting.streamers.length === 0) return msg.reply("No streamers saved in this server.");
+
+    const channelInfo = guildSetting.channelId
+      ? `<#${guildSetting.channelId}>`
+      : "Not set (use !t channel)";
+
     return msg.reply(
-      "Streamers:\n" +
-        streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
+      `**Notification Channel:** ${channelInfo}\n\n` +
+      "**Streamers:**\n" +
+      guildSetting.streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
     );
   }
 
-  msg.reply("Commands: add, delete, list");
+  msg.reply("Commands: channel, add, delete, list");
 });
 
-async function checkLoginChanged(streamer) {
+async function checkLoginChanged(streamer, guildId) {
   const { login, userid } = streamer;
 
   try {
@@ -216,7 +202,7 @@ async function checkLoginChanged(streamer) {
       }
     );
     if (res.data.data.length > 0) return login;
-  } catch {}
+  } catch { }
 
   try {
     const idCheck = await axios.get(
@@ -233,16 +219,25 @@ async function checkLoginChanged(streamer) {
 
     const newLogin = idCheck.data.data[0].login.toLowerCase();
     streamer.login = newLogin;
-    saveStreamers(streamers);
+
+    const guildSetting = getGuildSetting(guildId);
+    const streamerIndex = guildSetting.streamers.findIndex(s => s.userid === userid);
+    if (streamerIndex !== -1) {
+      guildSetting.streamers[streamerIndex].login = newLogin;
+      updateGuildSetting(guildId, guildSetting);
+    }
+
     return newLogin;
-  } catch {}
+  } catch { }
 
   return login;
 }
 
-async function sendLiveNotification(streamInfo, userInfo) {
+async function sendLiveNotification(streamInfo, userInfo, guildId, channelId) {
   const login = streamInfo.user_login;
-  const channel = client.channels.cache.get(discordChannelID);
+  const channel = client.channels.cache.get(channelId);
+
+  if (!channel) return;
 
   const embed = new EmbedBuilder()
     .setAuthor({
@@ -264,21 +259,25 @@ async function sendLiveNotification(streamInfo, userInfo) {
     });
   }
 
-  let thumbnailPath = path.join(THUMBNAIL_DIR, `${login}.jpg`);
+  const oldFiles = fs.readdirSync(THUMBNAIL_DIR).filter(f => f.startsWith(`${login}_`));
+  oldFiles.forEach(f => {
+    try {
+      fs.unlinkSync(path.join(THUMBNAIL_DIR, f));
+    } catch { }
+  });
 
-  const downloaded = await downloadThumbnail(
-    streamInfo.thumbnail_url.replace("{width}", 1280).replace("{height}", 720),
-    `${login}.jpg`
-  );
+  const timestamp = Date.now();
+  const filename = `${login}_${timestamp}.jpg`;
 
-  if (downloaded) {
-    thumbnailPath = downloaded;
-  } else if (!fs.existsSync(thumbnailPath)) {
-    thumbnailPath = null;
-  }
+  const thumbnailUrl = streamInfo.thumbnail_url
+    .replace("{width}", 1280)
+    .replace("{height}", 720) + `?t=${timestamp}`;
+
+  const downloaded = await downloadThumbnail(thumbnailUrl, filename);
+  let thumbnailPath = downloaded;
 
   if (thumbnailPath) {
-    embed.setImage(`attachment://${login}.jpg`);
+    embed.setImage(`attachment://${filename}`);
   }
 
   const row = new ActionRowBuilder().addComponents(
@@ -289,17 +288,17 @@ async function sendLiveNotification(streamInfo, userInfo) {
   );
 
   const files = thumbnailPath
-    ? [{ attachment: thumbnailPath, name: `${login}.jpg` }]
+    ? [{ attachment: thumbnailPath, name: path.basename(thumbnailPath) }]
     : [];
 
   await channel.send({ embeds: [embed], components: [row], files });
 
-  console.log(`[LIVE NOTIFY] ${login} — ${streamInfo.title}`);
+  console.log(`[LIVE NOTIFY] ${login} — ${streamInfo.title} (Guild: ${guildId})`);
 }
 
-async function checkStreamer(streamer) {
+async function checkStreamer(streamer, guildId, channelId) {
   try {
-    const login = await checkLoginChanged(streamer);
+    const login = await checkLoginChanged(streamer, guildId);
 
     const res = await axios.get(
       `https://api.twitch.tv/helix/streams?user_login=${login}`,
@@ -312,10 +311,12 @@ async function checkStreamer(streamer) {
     );
 
     const data = res.data.data;
+    const guildSetting = getGuildSetting(guildId);
 
     if (data.length > 0) {
-      if (!liveStatus[login]) {
-        liveStatus[login] = true;
+      if (!guildSetting.liveStatus[login]) {
+        guildSetting.liveStatus[login] = true;
+        updateGuildSetting(guildId, guildSetting);
 
         const streamInfo = data[0];
 
@@ -331,21 +332,42 @@ async function checkStreamer(streamer) {
 
         const userInfo = userInfoRes.data.data[0];
 
-        sendLiveNotification(streamInfo, userInfo);
+        sendLiveNotification(streamInfo, userInfo, guildId, channelId);
       }
     } else {
-      liveStatus[login] = false;
+      if (guildSetting.liveStatus[login]) {
+        guildSetting.liveStatus[login] = false;
+        updateGuildSetting(guildId, guildSetting);
+      }
     }
-  } catch {}
+  } catch { }
 }
 
 setInterval(() => {
   if (!twitchToken) return;
-  streamers.forEach(checkStreamer);
+
+  const allSettings = loadGuildSettings();
+
+  for (const [guildId, setting] of Object.entries(allSettings)) {
+    if (!setting.channelId || !setting.streamers || setting.streamers.length === 0) continue;
+
+    setting.streamers.forEach(streamer => {
+      checkStreamer(streamer, guildId, setting.channelId);
+    });
+  }
 }, 60000);
 
-app.get("/status", (req, res) => res.json(liveStatus));
+app.get("/status", (req, res) => {
+  const allSettings = loadGuildSettings();
+  const statusByGuild = {};
+
+  for (const [guildId, setting] of Object.entries(allSettings)) {
+    statusByGuild[guildId] = setting.liveStatus || {};
+  }
+
+  res.json(statusByGuild);
+});
 app.get("/discord", (req, res) => res.json({ connected: !!client.readyAt }));
 app.get("/twitch", (req, res) => res.json({ token: !!twitchToken }));
 
-app.listen(port, () => {});
+app.listen(port, () => { });
