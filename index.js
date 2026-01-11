@@ -10,6 +10,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  REST,
+  Routes,
 } = require("discord.js");
 
 const SETTINGS_DIR = path.join(__dirname, "settings");
@@ -101,9 +103,69 @@ const twitchSecret = process.env.TWITCH_SECRET;
 
 let twitchToken = null;
 
-client.on("ready", () => {
+client.on("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setActivity("osu!", { type: 0 });
+  
+  // Register slash commands
+  const commands = [
+    {
+      name: 'twitch',
+      description: 'Manage Twitch stream notifications',
+      options: [
+        {
+          name: 'add',
+          description: 'Add a streamer to this channel',
+          type: 1, // SUB_COMMAND
+          options: [
+            {
+              name: 'streamer',
+              description: 'Twitch username',
+              type: 3, // STRING
+              required: true
+            }
+          ]
+        },
+        {
+          name: 'delete',
+          description: 'Remove a streamer from this channel',
+          type: 1,
+          options: [
+            {
+              name: 'streamer',
+              description: 'Twitch username',
+              type: 3,
+              required: true
+            }
+          ]
+        },
+        {
+          name: 'list',
+          description: 'List all streamers in this channel',
+          type: 1
+        },
+        {
+          name: 'channel',
+          description: 'Setup this channel for stream notifications',
+          type: 1
+        }
+      ]
+    }
+  ];
+
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
+  
+  try {
+    console.log('Registering slash commands...');
+    const applicationId = process.env.DISCORD_APPLICATION_ID || client.user.id;
+    await rest.put(
+      Routes.applicationCommands(applicationId),
+      { body: commands }
+    );
+    console.log('Slash commands registered!');
+  } catch (error) {
+    console.error('Error registering slash commands:', error);
+  }
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
@@ -196,6 +258,87 @@ client.on("messageCreate", async (msg) => {
   }
 
   msg.reply("Commands: channel, add, delete, list");
+});
+
+// Handle slash commands
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  
+  if (interaction.commandName === 'twitch') {
+    const subcommand = interaction.options.getSubcommand();
+    const channelId = interaction.channel.id;
+    const channelSettings = loadChannelSettings(channelId);
+    
+    if (subcommand === 'channel') {
+      await interaction.reply(`This channel is now set up for stream notifications. Use \`/twitch add\` to add streamers.`);
+    }
+    
+    else if (subcommand === 'add') {
+      const name = interaction.options.getString('streamer').toLowerCase();
+      
+      if (channelSettings.streamers.find((s) => s.login === name)) {
+        return interaction.reply('Streamer already exists in this channel.');
+      }
+      
+      try {
+        const userInfoRes = await axios.get(
+          `https://api.twitch.tv/helix/users?login=${name}`,
+          {
+            headers: {
+              "Client-ID": twitchClientID,
+              Authorization: `Bearer ${twitchToken}`,
+            },
+          }
+        );
+        
+        if (userInfoRes.data.data.length === 0) {
+          return interaction.reply('Twitch user not found.');
+        }
+        
+        const userInfo = userInfoRes.data.data[0];
+        const newStreamer = {
+          login: userInfo.login.toLowerCase(),
+          userid: userInfo.id,
+        };
+        
+        channelSettings.streamers.push(newStreamer);
+        channelSettings.liveStatus[userInfo.login] = false;
+        
+        saveChannelSettings(channelId, channelSettings);
+        
+        await interaction.reply(`Streamer ${userInfo.login} added to this channel.`);
+      } catch (error) {
+        await interaction.reply('Error adding streamer. Please try again.');
+      }
+    }
+    
+    else if (subcommand === 'delete') {
+      const name = interaction.options.getString('streamer').toLowerCase();
+      
+      const exists = channelSettings.streamers.find((s) => s.login === name);
+      if (!exists) {
+        return interaction.reply('Streamer not found in this channel.');
+      }
+      
+      channelSettings.streamers = channelSettings.streamers.filter((s) => s.login !== name);
+      delete channelSettings.liveStatus[name];
+      
+      saveChannelSettings(channelId, channelSettings);
+      
+      await interaction.reply(`Streamer ${name} removed from this channel.`);
+    }
+    
+    else if (subcommand === 'list') {
+      if (channelSettings.streamers.length === 0) {
+        return interaction.reply('No streamers saved in this channel.');
+      }
+      
+      await interaction.reply(
+        "**Streamers:**\n" +
+        channelSettings.streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
+      );
+    }
+  }
 });
 
 async function checkLoginChanged(streamer, channelId) {

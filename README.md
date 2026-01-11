@@ -34,29 +34,23 @@ pm2 start index.js --name twitch-bot
 
 ## Commands
 
-All commands use the prefix `!t`
+The bot supports both text commands (prefix `!t`) and Discord slash commands (`/twitch`)
 
-### `!t channel`
-Sets up the current channel for stream notifications.
-- **Usage:** `!t channel`
-- **Description:** Initializes the channel for receiving stream notifications
+### Text Commands
 
-### `!t add <streamer>`
-Adds a Twitch streamer to the monitoring list.
-- **Usage:** `!t add <streamer_name>`
-- **Example:** `!t add inlayo0`
-- **Description:** Adds the specified Twitch streamer to this channel's notification list
+- `!t channel` - Sets up the current channel for stream notifications
+- `!t add <streamer>` - Adds a Twitch streamer (e.g., `!t add inlayo0`)
+- `!t delete <streamer>` - Removes a Twitch streamer (e.g., `!t delete inlayo0`)
+- `!t list` - Shows all monitored streamers in this channel
 
-### `!t delete <streamer>`
-Removes a Twitch streamer from the monitoring list.
-- **Usage:** `!t delete <streamer_name>`
-- **Example:** `!t delete inlayo0`
-- **Description:** Removes the specified Twitch streamer from this channel's notification list
+### Slash Commands
 
-### `!t list`
-Shows all streamers being monitored in this channel.
-- **Usage:** `!t list`
-- **Description:** Displays a list of all streamers currently being monitored with their Twitch IDs
+- `/twitch channel` - Setup this channel for stream notifications
+- `/twitch add streamer:<name>` - Add a Twitch streamer
+- `/twitch delete streamer:<name>` - Remove a Twitch streamer
+- `/twitch list` - List all streamers in this channel
+
+Both command types work identically and provide the same functionality.
 
 ## File Structure
 
