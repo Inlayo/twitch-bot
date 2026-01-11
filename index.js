@@ -204,7 +204,7 @@ client.on("messageCreate", async (msg) => {
   if (command === "add") {
     if (!name) return msg.reply("Please provide a streamer name.");
 
-    if (channelSettings.streamers.find((s) => s.login === name))
+    if (channelSettings.streamers.find((s) => s.name === name))
       return msg.reply("Streamer already exists in this channel.");
 
     const userInfoRes = await axios.get(
@@ -222,8 +222,8 @@ client.on("messageCreate", async (msg) => {
 
     const userInfo = userInfoRes.data.data[0];
     const newStreamer = {
-      login: userInfo.login.toLowerCase(),
-      userid: userInfo.id,
+      name: userInfo.login.toLowerCase(),
+      id: userInfo.id,
     };
 
     channelSettings.streamers.push(newStreamer);
@@ -237,10 +237,10 @@ client.on("messageCreate", async (msg) => {
   if (command === "delete") {
     if (!name) return msg.reply("Please provide a streamer name.");
 
-    const exists = channelSettings.streamers.find((s) => s.login === name);
+    const exists = channelSettings.streamers.find((s) => s.name === name);
     if (!exists) return msg.reply("Streamer not found in this channel.");
 
-    channelSettings.streamers = channelSettings.streamers.filter((s) => s.login !== name);
+    channelSettings.streamers = channelSettings.streamers.filter((s) => s.name !== name);
     delete channelSettings.liveStatus[name];
 
     saveChannelSettings(channelId, channelSettings);
@@ -253,7 +253,7 @@ client.on("messageCreate", async (msg) => {
 
     return msg.reply(
       "**Streamers:**\n" +
-      channelSettings.streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
+      channelSettings.streamers.map((s) => `• \`${s.name}\` (ID: ${s.id})`).join("\n")
     );
   }
 
@@ -276,7 +276,7 @@ client.on("interactionCreate", async (interaction) => {
     else if (subcommand === 'add') {
       const name = interaction.options.getString('streamer').toLowerCase();
       
-      if (channelSettings.streamers.find((s) => s.login === name)) {
+      if (channelSettings.streamers.find((s) => s.name === name)) {
         return interaction.reply('Streamer already exists in this channel.');
       }
       
@@ -297,8 +297,8 @@ client.on("interactionCreate", async (interaction) => {
         
         const userInfo = userInfoRes.data.data[0];
         const newStreamer = {
-          login: userInfo.login.toLowerCase(),
-          userid: userInfo.id,
+          name: userInfo.login.toLowerCase(),
+          id: userInfo.id,
         };
         
         channelSettings.streamers.push(newStreamer);
@@ -315,12 +315,12 @@ client.on("interactionCreate", async (interaction) => {
     else if (subcommand === 'delete') {
       const name = interaction.options.getString('streamer').toLowerCase();
       
-      const exists = channelSettings.streamers.find((s) => s.login === name);
+      const exists = channelSettings.streamers.find((s) => s.name === name);
       if (!exists) {
         return interaction.reply('Streamer not found in this channel.');
       }
       
-      channelSettings.streamers = channelSettings.streamers.filter((s) => s.login !== name);
+      channelSettings.streamers = channelSettings.streamers.filter((s) => s.name !== name);
       delete channelSettings.liveStatus[name];
       
       saveChannelSettings(channelId, channelSettings);
@@ -335,18 +335,18 @@ client.on("interactionCreate", async (interaction) => {
       
       await interaction.reply(
         "**Streamers:**\n" +
-        channelSettings.streamers.map((s) => `• \`${s.login}\` (ID: ${s.userid})`).join("\n")
+        channelSettings.streamers.map((s) => `• \`${s.name}\` (ID: ${s.id})`).join("\n")
       );
     }
   }
 });
 
 async function checkLoginChanged(streamer, channelId) {
-  const { login, userid } = streamer;
+  const { name, id } = streamer;
 
   try {
     const res = await axios.get(
-      `https://api.twitch.tv/helix/users?login=${login}`,
+      `https://api.twitch.tv/helix/users?login=${name}`,
       {
         headers: {
           "Client-ID": twitchClientID,
@@ -354,12 +354,12 @@ async function checkLoginChanged(streamer, channelId) {
         },
       }
     );
-    if (res.data.data.length > 0) return login;
+    if (res.data.data.length > 0) return name;
   } catch { }
 
   try {
     const idCheck = await axios.get(
-      `https://api.twitch.tv/helix/users?id=${userid}`,
+      `https://api.twitch.tv/helix/users?id=${id}`,
       {
         headers: {
           "Client-ID": twitchClientID,
@@ -368,22 +368,22 @@ async function checkLoginChanged(streamer, channelId) {
       }
     );
 
-    if (idCheck.data.data.length === 0) return login;
+    if (idCheck.data.data.length === 0) return name;
 
     const newLogin = idCheck.data.data[0].login.toLowerCase();
-    streamer.login = newLogin;
+    streamer.name = newLogin;
 
     const channelSettings = loadChannelSettings(channelId);
-    const streamerIndex = channelSettings.streamers.findIndex(s => s.userid === userid);
+    const streamerIndex = channelSettings.streamers.findIndex(s => s.id === id);
     if (streamerIndex !== -1) {
-      channelSettings.streamers[streamerIndex].login = newLogin;
+      channelSettings.streamers[streamerIndex].name = newLogin;
       saveChannelSettings(channelId, channelSettings);
     }
 
     return newLogin;
   } catch { }
 
-  return login;
+  return name;
 }
 
 async function sendLiveNotification(streamInfo, userInfo, channelId) {
