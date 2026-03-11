@@ -48,7 +48,6 @@ function getAllChannelIds() {
     .map(f => f.replace('.json', ''));
 }
 
-// Backward compatibility: migrate old guild-settings.json to new structure
 const OLD_GUILD_SETTINGS_FILE = path.join(__dirname, "guild-settings.json");
 if (fs.existsSync(OLD_GUILD_SETTINGS_FILE)) {
   try {
@@ -107,7 +106,6 @@ client.on("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setActivity("osu!", { type: 0 });
   
-  // Register slash commands
   const commands = [
     {
       name: 'twitch',
@@ -116,12 +114,12 @@ client.on("ready", async () => {
         {
           name: 'add',
           description: 'Add a streamer to this channel',
-          type: 1, // SUB_COMMAND
+          type: 1,
           options: [
             {
               name: 'streamer',
               description: 'Twitch username',
-              type: 3, // STRING
+              type: 3,
               required: true
             }
           ]
@@ -176,11 +174,14 @@ async function fetchTwitchToken() {
       `https://id.twitch.tv/oauth2/token?client_id=${twitchClientID}&client_secret=${twitchSecret}&grant_type=client_credentials`
     );
     twitchToken = res.data.access_token;
-  } catch { }
+    console.log("[TOKEN] Twitch token refreshed successfully");
+  } catch (error) {
+    console.error("[TOKEN ERROR] Failed to fetch Twitch token:", error.message);
+  }
 }
 
 fetchTwitchToken();
-setInterval(fetchTwitchToken, 86400000);
+setInterval(fetchTwitchToken, 3600000);
 
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
@@ -197,7 +198,6 @@ client.on("messageCreate", async (msg) => {
   const channelSettings = loadChannelSettings(channelId);
 
   if (command === "channel") {
-    // This command is now implicit - settings are per channel
     return msg.reply(`This channel is now set up for stream notifications. Use \`!t add <streamer>\` to add streamers.`);
   }
 
@@ -260,7 +260,6 @@ client.on("messageCreate", async (msg) => {
   msg.reply("Commands: channel, add, delete, list");
 });
 
-// Handle slash commands
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   
@@ -451,6 +450,11 @@ async function sendLiveNotification(streamInfo, userInfo, channelId) {
 
 async function checkStreamer(streamer, channelId) {
   try {
+    if (!twitchToken) {
+      console.warn("[CHECK] Twitch token not available yet for", streamer.name);
+      return;
+    }
+
     const login = await checkLoginChanged(streamer, channelId);
 
     const res = await axios.get(
@@ -468,6 +472,7 @@ async function checkStreamer(streamer, channelId) {
 
     if (data.length > 0) {
       if (!channelSettings.liveStatus[login]) {
+        console.log(`[LIVE] ${login} started streaming: ${data[0].title}`);
         channelSettings.liveStatus[login] = true;
         saveChannelSettings(channelId, channelSettings);
 
@@ -489,15 +494,21 @@ async function checkStreamer(streamer, channelId) {
       }
     } else {
       if (channelSettings.liveStatus[login]) {
+        console.log(`[OFFLINE] ${login} stopped streaming`);
         channelSettings.liveStatus[login] = false;
         saveChannelSettings(channelId, channelSettings);
       }
     }
-  } catch { }
+  } catch (error) {
+    console.error(`[CHECK ERROR] Error checking streamer ${streamer.name}:`, error.message);
+  }
 }
 
 setInterval(() => {
-  if (!twitchToken) return;
+  if (!twitchToken) {
+    console.warn("[INTERVAL] Skipping check: Twitch token not available");
+    return;
+  }
 
   const allChannelIds = getAllChannelIds();
 
@@ -506,6 +517,8 @@ setInterval(() => {
     
     if (!settings.streamers || settings.streamers.length === 0) continue;
 
+    console.log(`[INTERVAL] Checking ${settings.streamers.length} streamer(s) in channel ${channelId}`);
+    
     settings.streamers.forEach(streamer => {
       checkStreamer(streamer, channelId);
     });
