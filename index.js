@@ -62,7 +62,6 @@ if (fs.existsSync(OLD_GUILD_SETTINGS_FILE)) {
         saveChannelSettings(channelId, newSettings);
       }
     }
-    // Rename old file to backup
     fs.renameSync(OLD_GUILD_SETTINGS_FILE, OLD_GUILD_SETTINGS_FILE + '.backup');
     console.log('Migrated old guild-settings.json to new settings structure');
   } catch (err) {
@@ -504,26 +503,43 @@ async function checkStreamer(streamer, channelId) {
   }
 }
 
-setInterval(() => {
-  if (!twitchToken) {
-    console.warn("[INTERVAL] Skipping check: Twitch token not available");
-    return;
-  }
+setTimeout(() => {
+  console.log("[START] First stream check starting in 5 seconds...");
+  
+  const checkStreams = () => {
+    if (!twitchToken) {
+      console.warn("[CHECK] Twitch token not available yet");
+      return;
+    }
 
-  const allChannelIds = getAllChannelIds();
+    const allChannelIds = getAllChannelIds();
+    console.log(`[CHECK] Scanning ${allChannelIds.length} channel(s)`);
 
-  for (const channelId of allChannelIds) {
-    const settings = loadChannelSettings(channelId);
-    
-    if (!settings.streamers || settings.streamers.length === 0) continue;
+    if (allChannelIds.length === 0) {
+      console.log("[CHECK] No channels configured yet. Use /twitch add to add streamers.");
+      return;
+    }
 
-    console.log(`[INTERVAL] Checking ${settings.streamers.length} streamer(s) in channel ${channelId}`);
-    
-    settings.streamers.forEach(streamer => {
-      checkStreamer(streamer, channelId);
-    });
-  }
-}, 60000);
+    for (const channelId of allChannelIds) {
+      const settings = loadChannelSettings(channelId);
+      
+      if (!settings.streamers || settings.streamers.length === 0) {
+        console.log(`[CHECK] Channel ${channelId}: No streamers configured`);
+        continue;
+      }
+
+      console.log(`[CHECK] Channel ${channelId}: Checking ${settings.streamers.length} streamer(s)`);
+      
+      settings.streamers.forEach(streamer => {
+        checkStreamer(streamer, channelId);
+      });
+    }
+  };
+
+  checkStreams();
+  
+  setInterval(checkStreams, 60000);
+}, 5000);
 
 app.get("/status", (req, res) => {
   const allChannelIds = getAllChannelIds();
