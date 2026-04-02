@@ -442,12 +442,7 @@ async function sendLiveNotification(streamInfo, userInfo, channelId) {
     ? [{ attachment: thumbnailPath, name: path.basename(thumbnailPath) }]
     : [];
 
-  await channel.send({ 
-    content: `${login} is now live on Twitch!`,
-    embeds: [embed], 
-    components: [row], 
-    files 
-  });
+  await channel.send({ embeds: [embed], components: [row], files });
 
   console.log(`[LIVE NOTIFY] ${login} — ${streamInfo.title} (Channel: ${channelId})`);
 }
